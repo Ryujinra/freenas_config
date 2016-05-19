@@ -2,7 +2,7 @@
 
 # Set the file path and the line I want to add
 conf=/etc/local/collectd.conf
-inc='Include "/root/config/collectd/*.conf"'
+inc='Include "/data/config/collectd/*.conf"'
 
 # Fail if I'm not running as root
 if (( EUID ))
