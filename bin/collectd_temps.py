@@ -22,7 +22,7 @@ def get_num_cpus():
 
 def get_disk_serial(disk):
     try:
-        temp_line = subprocess.check_output("/usr/local/sbin/smartctl -i /dev/%s "
+        temp_line = subprocess.check_output("/usr/local/sbin/smartctl -n standby -i /dev/%s "
                                             "| grep -i 'Serial Number: '" % disk,
                                             shell=True)
         return disk, temp_line.strip().split()[-1]
@@ -31,7 +31,7 @@ def get_disk_serial(disk):
 
 def get_disk_temp(disk):
     try:
-        temp_line = subprocess.check_output("/usr/local/sbin/smartctl -A /dev/%s "
+        temp_line = subprocess.check_output("/usr/local/sbin/smartctl -n standby -A /dev/%s "
                                             "| grep -i '194 *Temperature_'" % disk,
                                             shell=True)
         return disk, to_float(temp_line.strip().split()[9])
