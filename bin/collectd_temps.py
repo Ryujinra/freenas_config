@@ -7,6 +7,7 @@ import time
 import socket
 from multiprocessing.pool import ThreadPool
 from pprint import pprint
+from disks import get_disks
 
 MAX_THREADS = 4
 
@@ -14,20 +15,8 @@ def to_float(temp):
     temp = temp.rstrip()
     return float(temp[:-1] if temp[-1].lower() == 'c' else temp)
 
-def get_disks():
-    return subprocess.check_output(['/sbin/sysctl', '-n', 'kern.disks']).rstrip().split()
-
 def get_num_cpus():
     return int(subprocess.check_output(['/sbin/sysctl', '-n', 'hw.ncpu']))
-
-def get_disk_serial(disk):
-    try:
-        temp_line = subprocess.check_output("/usr/local/sbin/smartctl -n standby -i /dev/%s "
-                                            "| grep -i 'Serial Number: '" % disk,
-                                            shell=True)
-        return disk, temp_line.strip().split()[-1]
-    except:
-        return disk, None
 
 def get_disk_temp(disk):
     try:
@@ -48,9 +37,8 @@ pool = ThreadPool(min(len(disks), MAX_THREADS))
 curr_time = time.time()
 
 cpu_temps = [get_cpu_temp(cpu) for cpu in range(num_cpus)]
-disk_serials = dict(pool.map(get_disk_serial, disks))
-disk_temps = pool.map(get_disk_temp, disks)
-disk_temps = [(disk_serials[disk], temp) for disk, temp in disk_temps]
+disk_temps = pool.map(get_disk_temp, disks.keys())
+disk_temps = [(disks[disk], temp) for disk, temp in disk_temps]
 
 hostname = socket.gethostname()
 
