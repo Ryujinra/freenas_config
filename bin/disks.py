@@ -21,6 +21,9 @@ def get_disk_serial(disk):
         return disk, None
 
 def get_disks():
-  disks = get_disk_devs()
-  pool = ThreadPool(min(len(disks), MAX_THREADS))
-  return dict(pool.map(get_disk_serial, disks))
+    disks = get_disk_devs()
+    pool = ThreadPool(min(len(disks), MAX_THREADS))
+    return dict(pool.map(get_disk_serial, disks))
+
+if __name__ == '__main__':
+    pprint(get_disks())
