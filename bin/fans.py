@@ -66,12 +66,12 @@ def test_mode(args):
 
         set_mode('Full')
 
-        for duty_cycle in range(args.dc_max, args.dc_min-10, -10):
-            for zone in args.zones:
+        for zone in args.zones:
+            for duty_cycle in range(args.dc_max, args.dc_min-10, -10):
                 set_duty_cycle(zone, duty_cycle)
-            sleep(5)
-            print_line('Duty cycle %d' % duty_cycle, saved_mode,
-                       get_duty_cycles(args.zones), get_speeds(args.zones))
+                sleep(5)
+                print_line('Zone%d DC %d' % (zone, duty_cycle), saved_mode,
+                           get_duty_cycles(args.zones), get_speeds(args.zones))
     except KeyboardInterrupt:
         pass
     finally:
@@ -87,7 +87,7 @@ def log_mode(args):
 def pid_mode(args):
     pass
 
-def show_mode(args):
+def get_data_mode(args):
     saved_dc = get_duty_cycles(args.zones)
     data = {
         'mode': get_mode(),
@@ -106,12 +106,12 @@ if __name__ == '__main__':
         'test': test_mode,
         'log': log_mode,
         'pid': pid_mode,
-        'show': show_mode,
+        'get': get_data_mode,
     }
     parser = argparse.ArgumentParser(description='Fan control')
     parser.add_argument('mode', choices=sorted(modes.keys()),
                         help='the mode to run')
-    parser.add_argument('--zones', '-z', type=int, choices=range(1,3), default=1,
+    parser.add_argument('--zones', '-z', type=int, choices=range(1,3), default=2,
                         help='the number of zones (default: 1)')
     parser.add_argument('--dc-min', type=int, choices=range(10,110,10), default=10,
                         help='the minimum duty cycle (default: 10)')
