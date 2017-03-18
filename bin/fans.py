@@ -9,11 +9,12 @@ from datetime import datetime
 import argparse
 import json
 import logging
+import logging.handlers
 import cPickle as pickle
 from pprint import pprint
 from disks import get_disks_info
 
-LOG_DIR = '/data/config/bin'
+LOG_DIR = '/var/log'
 IMPITOOL_BIN = '/usr/local/bin/ipmitool'
 DUTY_CYCLE_CMD = IMPITOOL_BIN + ' raw 0x30 0x70 0x66 %d %d'
 MODE_CMD = IMPITOOL_BIN + ' raw 0x30 0x45 %d'
@@ -93,7 +94,7 @@ def test_mode(args):
         set_mode('Full')
 
         for zone in args.zones:
-            for duty_cycle in range(args.dc_max, args.dc_min-10, -1):
+            for duty_cycle in range(args.dc_max, args.dc_min-10, -10):
                 set_duty_cycle(zone, duty_cycle)
                 sleep(5)
                 print_line('Zone%d DC %d' % (zone, duty_cycle), saved_mode,
@@ -110,14 +111,15 @@ def test_mode(args):
 def get_logger(name, filename):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
-    handler = logging.FileHandler(os.path.join(LOG_DIR, filename), mode='a')
+    handler = logging.handlers.RotatingFileHandler(os.path.join(LOG_DIR, filename),
+                                                   maxBytes=1024*1024, backupCount=5)
     handler.setLevel(logging.DEBUG)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
-    console.setFormatter(formatter)
+    #console = logging.StreamHandler()
+    #console.setLevel(logging.DEBUG)
+    #console.setFormatter(formatter)
     #logger.addHandler(console)
     return logger
 
@@ -150,15 +152,14 @@ def pid(set_point, kp, ki, kd, state, time_unit, pv, logger):
         logger.debug('prop: %.3f int: %.3f deriv: %.3f',
                      args.kp * error, args.ki * state['integral'], args.kd * derivative)
     else:
-        state = {
-            'integral': 0,
-        }
+        logger.debug('initializing PID state')
+        state = {'integral': 0}
         cv = None
 
     state['prev_time'] = now
     state['prev_error'] = error
 
-    return cv
+    return cv, state
 
 def pid_mode(args, zone=0):
     logger = get_logger('log_mode', 'pid.log')
@@ -175,8 +176,8 @@ def pid_mode(args, zone=0):
     else:
         state = None
 
-    cv = pid(args.set_point, args.kp, args.ki, args.kd, state, args.time_unit,
-             temp_mean, logger)
+    cv, state = pid(args.set_point, args.kp, args.ki, args.kd, state, args.time_unit,
+                    temp_mean, logger)
 
     if cv:
         curr_dc = state.get('curr_dc', get_duty_cycle(zone))
