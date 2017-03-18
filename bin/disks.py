@@ -16,7 +16,7 @@ SMARTCTL = '/usr/local/sbin/smartctl'
 TEMP_CMD = "{smartctl} -n standby -A /dev/{dev} | grep -i '194 *Temperature_'"
 SERIAL_CMD = "{smartctl} -i /dev/{dev} | grep -i 'Serial Number: '"
 DEVS_CMD = '/sbin/sysctl -n kern.disks'
-POOL = ThreadPool(1)#get_num_cpus())
+POOL = ThreadPool(get_num_cpus())
 
 def to_float(temp):
     temp = temp.rstrip()
