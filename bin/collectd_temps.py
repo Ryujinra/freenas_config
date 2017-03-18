@@ -7,7 +7,7 @@ import time
 import socket
 from multiprocessing.pool import ThreadPool
 from pprint import pprint
-from disks import get_disks
+from disks import get_disks, get_disk_temp
 
 MAX_THREADS = 4
 
@@ -18,14 +18,7 @@ def to_float(temp):
 def get_num_cpus():
     return int(subprocess.check_output(['/sbin/sysctl', '-n', 'hw.ncpu']))
 
-def get_disk_temp(disk):
-    try:
-        temp_line = subprocess.check_output("/usr/local/sbin/smartctl -n standby -A /dev/%s "
-                                            "| grep -i '194 *Temperature_'" % disk,
-                                            shell=True)
-        return disk, to_float(temp_line.strip().split()[9])
-    except Exception as ex:
-        return disk, None
+
 
 def get_cpu_temp(cpu):
     return cpu, to_float(subprocess.check_output(['/sbin/sysctl', '-n',

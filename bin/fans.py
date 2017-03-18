@@ -1,16 +1,25 @@
+#!/usr/local/bin/python
+
 from __future__ import print_function
 import subprocess
+import os
 import re
 from time import sleep
 from datetime import datetime
 import argparse
 import json
+import logging
+import cPickle as pickle
 from pprint import pprint
+from disks import get_disks_info
 
+LOG_DIR = '/data/config/bin'
 IMPITOOL_BIN = '/usr/local/bin/ipmitool'
 DUTY_CYCLE_CMD = IMPITOOL_BIN + ' raw 0x30 0x70 0x66 %d %d'
 MODE_CMD = IMPITOOL_BIN + ' raw 0x30 0x45 %d'
 FAN_SPEEDS_CMD = IMPITOOL_BIN + ' sdr type fan'
+#CPU_TEMP_CMD = IMPITOOL_BIN + ' sdr type temperature'
+CPU_TEMP_CMD = '/sbin/sysctl dev.cpu | grep temperature'
 MODES = {0: 'Standard', 1: 'Full', 2: 'Optimal', 4: 'HeavyIO'}
 
 def get_duty_cycle(zone):
@@ -30,12 +39,29 @@ def set_mode(mode):
     mode = dict((val, key) for key, val in MODES.iteritems())[mode]
     subprocess.check_output((MODE_CMD % 1 + ' %d' % mode).split())
 
-def get_speeds(zones):
+# warning: this command cause duty cycle reads after this to be wrong
+def get_fan_speeds(zones):
     sdr_re = re.compile(r'(FAN\S+)\s*\|.*\|\s*(\S+)\s*\|.*\|\s*(\d+)\s*RPM\s*\n')
-    # warning: this command cause duty cycle reads after this to be wrong
     sdr = subprocess.check_output(FAN_SPEEDS_CMD.split())
     return dict((name, {'speed': int(speed), 'status': status})
                     for name, status, speed in sdr_re.findall(sdr))
+
+def get_fan_speeds_safe(zones):
+    saved_dc = get_duty_cycles(args.zones)
+    try:
+        return get_fan_speeds(zones)
+    finally:
+        for zone in args.zones:
+            try: set_duty_cycle(zone, saved_dc[zone])
+            except: pass
+
+cpu_re = re.compile(r'^dev\.cpu\.\d+\.temperature:\s*(\d+\.\d+)C$')
+
+def get_cpu_temp():
+    lines = [line.strip()
+             for line in subprocess.check_output(CPU_TEMP_CMD, shell=True).split('\n') if line]
+    temps = [float(cpu_re.match(line).groups()[0]) for line in lines]
+    return max(temps)
 
 def print_header(zones, fans):
     rpm = 'Curr_RPM' + '_' * len(fans) * 9
@@ -60,18 +86,18 @@ def test_mode(args):
     saved_dc = get_duty_cycles(args.zones)
     saved_mode = get_mode()
     try:
-        speeds = get_speeds(args.zones)
+        speeds = get_fan_speeds(args.zones)
         print_header(args.zones, speeds)
         print_line('Starting state', saved_mode, saved_dc, speeds)
 
         set_mode('Full')
 
         for zone in args.zones:
-            for duty_cycle in range(args.dc_max, args.dc_min-10, -10):
+            for duty_cycle in range(args.dc_max, args.dc_min-10, -1):
                 set_duty_cycle(zone, duty_cycle)
                 sleep(5)
                 print_line('Zone%d DC %d' % (zone, duty_cycle), saved_mode,
-                           get_duty_cycles(args.zones), get_speeds(args.zones))
+                           get_duty_cycles(args.zones), get_fan_speeds(args.zones))
     except KeyboardInterrupt:
         pass
     finally:
@@ -81,25 +107,121 @@ def test_mode(args):
             try: set_duty_cycle(zone, saved_dc[zone])
             except: pass
 
-def log_mode(args):
-    pass
+def get_logger(name, filename):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    handler = logging.FileHandler(os.path.join(LOG_DIR, filename), mode='a')
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    console = logging.StreamHandler()
+    console.setLevel(logging.DEBUG)
+    console.setFormatter(formatter)
+    #logger.addHandler(console)
+    return logger
 
-def pid_mode(args):
-    pass
+def get_disk_temps(args):
+    disks_info = get_disks_info(args.disk_match)
+    return [value['temp_c'] for key, value in disks_info.iteritems()
+            if value['temp_c'] is not None]
+
+def log_mode(args):
+    logger = get_logger('log_mode', 'temps.log')
+    temps = get_disk_temps(args)
+    logger.info('%s mean: %s max: %s', temps, sum(temps) / len(temps), max(temps))
+
+def pid(set_point, kp, ki, kd, state, time_unit, pv, logger):
+    now = datetime.now()
+
+    logger.debug('sp: %s pv: %s', set_point, pv)
+
+    error = pv - set_point
+
+    if state:
+        logger.debug(state)
+
+        dt = ((now - state['prev_time']).total_seconds()) / time_unit
+        state['integral'] += error * dt
+        derivative = (error - state['prev_error']) / dt
+        cv = args.kp * error + args.ki * state['integral'] + args.kd * derivative
+        logger.debug('Kp: %.1f Ki: %.1f Kd: %.1f err: %.3f dt: %.3f int: %.3f deriv: %.3f cv:%.2f',
+                     args.kp, args.ki, args.kd, error, dt, state['integral'], derivative, cv)
+        logger.debug('prop: %.3f int: %.3f deriv: %.3f',
+                     args.kp * error, args.ki * state['integral'], args.kd * derivative)
+    else:
+        state = {
+            'integral': 0,
+        }
+        cv = None
+
+    state['prev_time'] = now
+    state['prev_error'] = error
+
+    return cv
+
+def pid_mode(args, zone=0):
+    logger = get_logger('log_mode', 'pid.log')
+    logger.debug('-----------------------------')
+
+    temps = get_disk_temps(args)
+    temp_max = max(temps)
+    temp_mean = sum(temps) / len(temps)
+    logger.debug('%s mean: %s max: %s', temps, sum(temps) / len(temps), max(temps))
+
+    if not args.reset and os.path.isfile('/var/run/disk_temp_state.pickle'):
+        with open('/var/run/disk_temp_state.pickle', 'r') as state_file:
+            state = pickle.load(state_file)
+    else:
+        state = None
+
+    cv = pid(args.set_point, args.kp, args.ki, args.kd, state, args.time_unit,
+             temp_mean, logger)
+
+    if cv:
+        curr_dc = state.get('curr_dc', get_duty_cycle(zone))
+        logger.debug('curr_dc: %d', curr_dc)
+
+        duty_cycle = int(round(min(max(curr_dc + cv, args.dc_min), args.dc_max)))
+        logger.debug('new duty_cycle: %d', duty_cycle)
+        set_duty_cycle(zone, duty_cycle)
+        state['curr_dc'] = duty_cycle
+
+    with open('/var/run/disk_temp_state.pickle', 'w') as state_file:
+        pickle.dump(state, state_file)
+
+def cpu_mode(args, zone=1):
+    curr_dc = get_duty_cycle(zone)
+    while True:
+        temp = get_cpu_temp()
+        dc_per_degree = (args.dc_max - args.dc_min) / (args.cpu_max - args.cpu_start)
+        new_dc = args.dc_min + (temp - args.cpu_start) * dc_per_degree
+        new_dc = min(max(new_dc, args.dc_min), args.dc_max)
+        curr_dc = get_duty_cycle(zone)
+        if new_dc != curr_dc:
+            set_duty_cycle(zone, new_dc)
+            curr_dc = new_dc
+        sleep(1)
 
 def get_data_mode(args):
     saved_dc = get_duty_cycles(args.zones)
-    data = {
+    fans = {
         'mode': get_mode(),
         'duty_cycle': saved_dc,
     }
     try:
-        data.update(get_speeds(args.zones))
+        fans.update(get_fan_speeds(args.zones))
+        cpu = get_cpu_temp()
     finally:
         for zone in args.zones:
             try: set_duty_cycle(zone, saved_dc[zone])
             except: pass
-    print(json.dumps(data, indent=4, sort_keys=True))
+    disks = get_disks_info(args.disk_match)
+    temps = [value['temp_c'] for value in disks.values()]
+    disks['max'] = max(temps)
+    disks['min'] = min(temps)
+    disks['mean'] = sum(temps) / len(temps)
+    print(json.dumps({'fans': fans, 'disks': disks, 'cpu': cpu}, indent=4, sort_keys=True))
 
 if __name__ == '__main__':
     modes = {
@@ -107,16 +229,35 @@ if __name__ == '__main__':
         'log': log_mode,
         'pid': pid_mode,
         'get': get_data_mode,
+        'cpu': cpu_mode,
     }
     parser = argparse.ArgumentParser(description='Fan control')
     parser.add_argument('mode', choices=sorted(modes.keys()),
                         help='the mode to run')
-    parser.add_argument('--zones', '-z', type=int, choices=range(1,3), default=2,
+    parser.add_argument('--zones', '-z', type=int, choices=range(1,3), default=1,
                         help='the number of zones (default: 1)')
-    parser.add_argument('--dc-min', type=int, choices=range(10,110,10), default=10,
+    parser.add_argument('--dc-min', type=int, choices=range(10,110,10), default=20,
                         help='the minimum duty cycle (default: 10)')
     parser.add_argument('--dc-max', type=int, choices=range(10,110,10), default=100,
                         help='the maximum duty cycle (default: 100)')
+    parser.add_argument('--set-point', '-s', type=float, metavar='TEMP_C', default=38,
+                        help='the disk temperature set point (default: 40)')
+    parser.add_argument('--disk-match', '-d', metavar='REGEX', default=r'^da\d+$',
+                        help=r'only use disks that match this regular expression (default: "^da\d+$")')
+    parser.add_argument('--reset', '-r', action='store_true',
+                        help='reset the state of the PID controller')
+    parser.add_argument('--kp', type=float, default=10,
+                        help='Kp, the proportional constant (default: 2)')
+    parser.add_argument('--ki', type=float, default=0,
+                        help='Ki, the integral constant (default: .2)')
+    parser.add_argument('--kd', type=float, default=30,
+                        help='Kd, the derivative constant (default: .1)')
+    parser.add_argument('--time-unit', '-t', type=float, metavar='SECS', default=60.0,
+                        help=('the integral time unit (default: 300)'))
+    parser.add_argument('--cpu-start', type=float, metavar='TEMP_C', default=54.0,
+                        help=('the integral time unit (default: 54.0)'))
+    parser.add_argument('--cpu-max', type=float, metavar='TEMP_C', default=70.0,
+                        help=('the integral time unit (default: 70.0)'))
     args = parser.parse_args()
 
     if args.dc_min > args.dc_max:
