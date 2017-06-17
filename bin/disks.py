@@ -18,21 +18,21 @@ SERIAL_CMD = "{smartctl} -i /dev/{dev} | grep -i 'Serial Number: '"
 DEVS_CMD = '/sbin/sysctl -n kern.disks'
 POOL = ThreadPool(get_num_cpus())
 
-def to_float(temp):
+def celsius_to_float(temp):
     temp = temp.rstrip()
     return float(temp[:-1] if temp[-1].lower() == 'c' else temp)
 
 def get_disk_devs(match=''):
     match_re = re.compile(match)
-    return [dev for dev in subprocess.check_output(DEVS_CMD.split()).rstrip().split()
-            if match_re.match(dev)]
+    return [dev.decode("utf-8") for dev in subprocess.check_output(DEVS_CMD.split()).rstrip().split()
+            if match_re.match(dev.decode("utf-8"))]
 
 def get_disk_serial(dev):
     try:
         temp_line = subprocess.check_output(SERIAL_CMD.format(smartctl=SMARTCTL, dev=dev),
                                             shell=True)
-        return dev, temp_line.strip().split()[-1]
-    except:
+        return dev, temp_line.strip().split()[-1].decode("utf-8")
+    except Exception as ex:
         return dev, None
 
 def get_disks():
@@ -47,7 +47,7 @@ def get_disk_temp(dev):
         return dev, None, err.returncode
     try:
         out_line = result.communicate()[0]
-        return dev, to_float(out_line.strip().split()[9]), result.returncode
+        return dev, celsius_to_float(out_line.strip().split()[9].decode("utf-8")), result.returncode
     except Exception as ex:
         return dev, None, result.returncode
 

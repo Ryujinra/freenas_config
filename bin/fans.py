@@ -10,7 +10,7 @@ import argparse
 import json
 import logging
 import logging.handlers
-import cPickle as pickle
+import pickle
 from pprint import pprint
 from disks import get_disks_info
 
@@ -125,7 +125,7 @@ def get_logger(name, filename):
 
 def get_disk_temps(args):
     disks_info = get_disks_info(args.disk_match)
-    return [value['temp_c'] for key, value in disks_info.iteritems()
+    return [value['temp_c'] for key, value in disks_info.items()
             if value['temp_c'] is not None]
 
 def log_mode(args):
@@ -171,7 +171,7 @@ def pid_mode(args, zone=0):
     logger.debug('%s mean: %s max: %s', temps, sum(temps) / len(temps), max(temps))
 
     if not args.reset and os.path.isfile('/var/run/disk_temp_state.pickle'):
-        with open('/var/run/disk_temp_state.pickle', 'r') as state_file:
+        with open('/var/run/disk_temp_state.pickle', 'rb') as state_file:
             state = pickle.load(state_file)
     else:
         state = None
@@ -188,7 +188,7 @@ def pid_mode(args, zone=0):
         set_duty_cycle(zone, duty_cycle)
         state['curr_dc'] = duty_cycle
 
-    with open('/var/run/disk_temp_state.pickle', 'w') as state_file:
+    with open('/var/run/disk_temp_state.pickle', 'wb') as state_file:
         pickle.dump(state, state_file)
 
 def cpu_mode(args, zone=1):
