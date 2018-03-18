@@ -1,4 +1,4 @@
-#!/usr/local/bin/python
+#!/usr/local/bin/python3
 
 from __future__ import print_function
 import subprocess
@@ -13,6 +13,17 @@ import logging.handlers
 import pickle
 from pprint import pprint
 from disks import get_disks_info
+
+# Reset the bmc if fans are stuck at 100%
+# ipmitool bmc reset warm
+
+# Set fan thresholds
+# ipmitool sensor thresh FAN1 lower 100 200 300
+# ipmitool sensor thresh FAN1 upper 2800 2900 3000
+# ipmitool sensor thresh FAN2 upper 20000 21000 22000
+# ipmitool sensor thresh FAN2 lower 100 200 300
+# ipmitool sensor thresh FANA lower 100 200 300
+# ipmitool sensor thresh FANA upper 1400 1500 1600
 
 LOG_DIR = '/var/log'
 IMPITOOL_BIN = '/usr/local/bin/ipmitool'
@@ -45,7 +56,7 @@ def get_fan_speeds(zones):
     sdr_re = re.compile(r'(FAN\S+)\s*\|.*\|\s*(\S+)\s*\|.*\|\s*(\d+)\s*RPM\s*\n')
     sdr = subprocess.check_output(FAN_SPEEDS_CMD.split())
     return dict((name, {'speed': int(speed), 'status': status})
-                    for name, status, speed in sdr_re.findall(sdr))
+                    for name, status, speed in sdr_re.findall(sdr.decode('utf-8')))
 
 def get_fan_speeds_safe(zones):
     saved_dc = get_duty_cycles(args.zones)
@@ -60,7 +71,7 @@ cpu_re = re.compile(r'^dev\.cpu\.\d+\.temperature:\s*(\d+\.\d+)C$')
 
 def get_cpu_temp():
     lines = [line.strip()
-             for line in subprocess.check_output(CPU_TEMP_CMD, shell=True).split('\n') if line]
+             for line in subprocess.check_output(CPU_TEMP_CMD, shell=True).decode('utf-8').split('\n') if line]
     temps = [float(cpu_re.match(line).groups()[0]) for line in lines]
     return max(temps)
 
@@ -161,7 +172,7 @@ def pid(set_point, kp, ki, kd, state, time_unit, pv, logger):
 
     return cv, state
 
-def pid_mode(args, zone=0):
+def pid_mode(args, zone=1):
     logger = get_logger('log_mode', 'pid.log')
     logger.debug('-----------------------------')
 
@@ -191,18 +202,29 @@ def pid_mode(args, zone=0):
     with open('/var/run/disk_temp_state.pickle', 'wb') as state_file:
         pickle.dump(state, state_file)
 
-def cpu_mode(args, zone=1):
-    curr_dc = get_duty_cycle(zone)
+def cpu_mode(args, zone=0):
+    curr_dc = -1
     while True:
-        temp = get_cpu_temp()
-        dc_per_degree = (args.dc_max - args.dc_min) / (args.cpu_max - args.cpu_start)
-        new_dc = args.dc_min + (temp - args.cpu_start) * dc_per_degree
-        new_dc = min(max(new_dc, args.dc_min), args.dc_max)
-        curr_dc = get_duty_cycle(zone)
-        if new_dc != curr_dc:
-            set_duty_cycle(zone, new_dc)
-            curr_dc = new_dc
-        sleep(1)
+        try:
+            temp = get_cpu_temp()
+            dc_per_degree = (args.dc_max - args.dc_min) / (args.cpu_max - args.cpu_start)
+            new_dc = args.dc_min + (temp - args.cpu_start) * dc_per_degree
+            new_dc = min(max(new_dc, args.dc_min), args.dc_max)
+            if new_dc != curr_dc:
+                set_duty_cycle(zone, new_dc)
+                curr_dc = new_dc
+            sleep(1)
+            curr_dc = get_duty_cycle(zone)
+        except KeyboardInterrupt:
+            raise
+        except:
+            try:
+                set_duty_cycle(zone, 100)
+            except KeyboardInterrupt:
+                raise
+            except:
+                pass
+            pass
 
 def get_data_mode(args):
     saved_dc = get_duty_cycles(args.zones)
