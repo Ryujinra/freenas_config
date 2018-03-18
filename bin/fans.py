@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 import subprocess
+import socket
 import os
 import re
 from time import sleep
@@ -12,6 +13,7 @@ import logging
 import logging.handlers
 import pickle
 from pprint import pprint
+import requests
 from disks import get_disks_info
 
 # Reset the bmc if fans are stuck at 100%
@@ -144,9 +146,7 @@ def log_mode(args):
     temps = get_disk_temps(args)
     logger.info('%s mean: %s max: %s', temps, sum(temps) / len(temps), max(temps))
 
-def pid(set_point, kp, ki, kd, state, time_unit, pv, logger):
-    now = datetime.now()
-
+def pid(now, set_point, kp, ki, kd, state, time_unit, pv, logger):
     logger.debug('sp: %s pv: %s', set_point, pv)
 
     error = pv - set_point
@@ -187,7 +187,8 @@ def pid_mode(args, zone=1):
     else:
         state = None
 
-    cv, state = pid(args.set_point, args.kp, args.ki, args.kd, state, args.time_unit,
+    now = datetime.now()
+    cv, state = pid(now, args.set_point, args.kp, args.ki, args.kd, state, args.time_unit,
                     temp_mean, logger)
 
     if cv:
@@ -199,8 +200,19 @@ def pid_mode(args, zone=1):
         set_duty_cycle(zone, duty_cycle)
         state['curr_dc'] = duty_cycle
 
+    write_influx_pid(args, now, state, logger)
+
     with open('/var/run/disk_temp_state.pickle', 'wb') as state_file:
         pickle.dump(state, state_file)
+
+def write_influx_pid(args, now, state, logger):
+    ts = now.timestamp() * 1000000000
+    hostname = socket.gethostname()
+    data = ['disk,host=%s value=%d %d' % (hostname, state['curr_dc'], ts),
+            'set_point,host=%s value=%d %d' % (hostname, args.set_point, ts)]
+    #logger.debug(data)
+    resp = requests.post('%s/write' % args.influx_uri, params={'db': args.influx_db}, data='\n'.join(data))
+    resp.raise_for_status()
 
 def cpu_mode(args, zone=0):
     curr_dc = -1
@@ -264,7 +276,7 @@ if __name__ == '__main__':
     parser.add_argument('--dc-max', type=int, choices=range(10,110,10), default=100,
                         help='the maximum duty cycle (default: 100)')
     parser.add_argument('--set-point', '-s', type=float, metavar='TEMP_C', default=38,
-                        help='the disk temperature set point (default: 40)')
+                        help='the disk temperature set point (default: 38)')
     parser.add_argument('--disk-match', '-d', metavar='REGEX', default=r'^da\d+$',
                         help=r'only use disks that match this regular expression (default: "^da\d+$")')
     parser.add_argument('--reset', '-r', action='store_true',
@@ -281,6 +293,10 @@ if __name__ == '__main__':
                         help=('the integral time unit (default: 54.0)'))
     parser.add_argument('--cpu-max', type=float, metavar='TEMP_C', default=70.0,
                         help=('the integral time unit (default: 70.0)'))
+    parser.add_argument('--influx-uri', default='http://dashboard.lan:8086',
+                        help='send information to the given influx URI')
+    parser.add_argument('--influx-db', default='fans',
+                        help='send information to the given influx db')
     args = parser.parse_args()
 
     if args.dc_min > args.dc_max:
