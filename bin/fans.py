@@ -12,7 +12,7 @@ import json
 import logging
 import logging.handlers
 import pickle
-from pprint import pprint
+from pprint import pprint, pformat
 import requests
 from disks import get_disks_info
 
@@ -152,7 +152,7 @@ def pid(now, set_point, kp, ki, kd, state, time_unit, pv, logger):
     error = pv - set_point
 
     if state:
-        logger.debug(state)
+        logger.debug(pformat(state))
 
         dt = ((now - state['prev_time']).total_seconds()) / time_unit
         state['integral'] += error * dt
