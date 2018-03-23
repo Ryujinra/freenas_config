@@ -176,7 +176,8 @@ def pid_mode(args, zone=1):
     logger = get_logger('log_mode', 'pid.log')
     logger.debug('-----------------------------')
 
-    temps = get_disk_temps(args)
+    disks_info = get_disks_info(args.disk_match)
+    temps = [value['temp_c'] for key, value in disks_info.items() if value['temp_c'] is not None]
     temp_max = max(temps)
     temp_mean = sum(temps) / len(temps)
     logger.debug('%s mean: %s max: %s', temps, sum(temps) / len(temps), max(temps))
@@ -200,26 +201,34 @@ def pid_mode(args, zone=1):
         set_duty_cycle(zone, duty_cycle)
         state['curr_dc'] = duty_cycle
 
-    write_influx_pid(args, now, state, logger)
+    write_influx_pid(args, now, state, disks_info, logger)
 
     with open('/var/run/disk_temp_state.pickle', 'wb') as state_file:
         pickle.dump(state, state_file)
 
-def write_influx_pid(args, now, state, logger):
-    ts = now.timestamp() * 1000000000
-    hostname = socket.gethostname()
-    data = ['disk,host=%s value=%d %d' % (hostname, state['curr_dc'], ts),
-            'set_point,host=%s value=%d %d' % (hostname, args.set_point, ts)]
-    #logger.debug(data)
-    resp = requests.post('%s/write' % args.influx_uri, params={'db': args.influx_db}, data='\n'.join(data))
-    resp.raise_for_status()
+def write_influx_pid(args, now, state, disks_info, logger):
+    try:
+        ts = now.timestamp() * 1000000000
+        hostname = socket.gethostname()
+        curr_dc = state.get('curr_dc')
+        if curr_dc is not None:
+            #logger.debug(pformat(disks_info))
+            data = ['duty_cycle,host=%s value=%d %d' % (hostname, curr_dc, ts),
+                    'set_point,host=%s value=%d %d' % (hostname, args.set_point, ts)]
+            for key, val in disks_info.items():
+                data.append('disk_temp,host=%s,serial=%s value=%f %d' % (hostname, val['serial'], val['temp_c'], ts))
+            #logger.debug(pformat(data))
+            resp = requests.post('%s/write' % args.influx_uri, params={'db': args.influx_db}, data='\n'.join(data))
+            resp.raise_for_status()
+    except Exception as ex:
+        logger.exception(ex)
 
 def cpu_mode(args, zone=0):
     curr_dc = -1
+    dc_per_degree = (args.dc_max - args.dc_min) / (args.cpu_max - args.cpu_start)
     while True:
         try:
             temp = get_cpu_temp()
-            dc_per_degree = (args.dc_max - args.dc_min) / (args.cpu_max - args.cpu_start)
             new_dc = args.dc_min + (temp - args.cpu_start) * dc_per_degree
             new_dc = min(max(new_dc, args.dc_min), args.dc_max)
             if new_dc != curr_dc:
