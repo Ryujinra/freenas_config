@@ -14,25 +14,26 @@ import requests
 
 LOG_DIR = '/var/log'
 SCAN_CMD = 'smartctl --scan'
-CMD = 'smartctl --info --attributes --health --format=brief %s'
+CMD = 'smartctl --info --attributes --health --format=brief --log=selftest %s'
 sata_re = re.compile(b'^SATA (\d\.\d), (\d\.\d) Gb/s \(current: (\d.\d) Gb/s\)$')
 
-def get_logger(name, filename):
+def get_logger(name, filename, level=logging.DEBUG):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(level)
     handler = logging.handlers.RotatingFileHandler(os.path.join(LOG_DIR, filename),
                                                    maxBytes=1024*1024, backupCount=5)
-    handler.setLevel(logging.DEBUG)
+    handler.setLevel(level)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    #console = logging.StreamHandler()
-    #console.setLevel(logging.DEBUG)
-    #console.setFormatter(formatter)
-    #logger.addHandler(console)
+
+    console = logging.StreamHandler()
+    console.setLevel(level)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
     return logger
 
-def parse_smart(hostname, device, output):
+def parse_smart(hostname, device, output, status):
     info, data = output.strip().split(b'=== START OF READ SMART DATA SECTION ===')
     data = data.strip()
     info = info.strip().split(b'=== START OF INFORMATION SECTION ===')[-1].strip()
@@ -60,6 +61,7 @@ def parse_smart(hostname, device, output):
         'sata_current_speed': float(sata[2]),
         'sata_version': sata[0],
         'is_ssd': is_ssd,
+        'status': status,
     }
     wwn = info.get(b'LU WWN Device Id')
     if wwn:
@@ -97,8 +99,10 @@ def create_influx_str(ts, info, attributes):
     tags.extend(['%s=%d' % (key, info[key]) for key in ('enabled', 'is_ssd', 'capacity', 'rpm')])
     tags = ','.join(tags)
     if not info['is_ssd']:
-        fields = ('health_ok=%d,read_error_rate=%d,realloc_sector_cnt=%d,seek_error_rate=%d,'
-                  'spin_retry_cnt=%d,power_on_hours=%d,udma_crc_error_cnt=%d') % (info['health_ok'],
+        fields = ('status=%d,health_ok=%d,read_error_rate=%d,realloc_sector_cnt=%d,seek_error_rate=%d,'
+                  'spin_retry_cnt=%d,power_on_hours=%d,udma_crc_error_cnt=%d') % (
+                  info['status'],
+                  info['health_ok'],
                   attributes[b'Raw_Read_Error_Rate']['raw_value'],
                   attributes[b'Reallocated_Sector_Ct']['raw_value'],
                   attributes[b'Seek_Error_Rate']['raw_value'],
@@ -114,7 +118,8 @@ def create_influx_str(ts, info, attributes):
     return 'smart_device,%s %s %d' % (tags, fields, ts)
 
 def main(args):
-    logger = get_logger('smart_to_influx', 'smart_to_influx.log')
+    logger = get_logger('smart_to_influx', 'smart_to_influx.log',
+                        logging.DEBUG if args.debug else logging.INFO)
     try:
         if not args.devices:
             rows = subprocess.check_output(SCAN_CMD.split()).strip().split(b'\n')
@@ -123,14 +128,26 @@ def main(args):
         hostname = socket.gethostname()
         ts = datetime.now().timestamp() * 1000000000
         for device in args.devices:
+            resp = None
             try:
-                info, attrs = parse_smart(hostname, device, subprocess.check_output((CMD % device).split()))
-                if not info['is_ssd']:
-                    ss = create_influx_str(ts, info, attrs)
-                    resp = requests.post('%s/write' % args.influx_uri, params={'db': args.influx_db}, data=ss)
-                    resp.raise_for_status()
+                cmd = CMD % device
+                logger.debug(cmd)
+                result = subprocess.run(cmd.split(), check=False, stdout=subprocess.PIPE)
+                if result.returncode == 0 or result.returncode >= 8:
+                    info, attrs = parse_smart(hostname, device, result.stdout, result.returncode)
+                    logger.debug(info)
+                    if not info['is_ssd']:
+                        ss = create_influx_str(ts, info, attrs)
+                        if args.debug:
+                            logger.debug(ss)
+                        else:
+                            resp = requests.post('%s/write' % args.influx_uri, params={'db': args.influx_db}, data=ss)
+                            resp.raise_for_status()
+                else:
+                    result.check_returncode()
             except Exception as ex:
-                print(resp.json())
+                if resp is not None:
+                    print(resp.json())
                 logger.exception(ex)
     except Exception as ex:
         logger.exception(ex)
@@ -143,6 +160,8 @@ if __name__ == '__main__':
                         help='send information to the given influx URI')
     parser.add_argument('--influx-db', default='smart',
                         help='send information to the given influx db')
+    parser.add_argument('--debug', '-d', action='store_true',
+                        help='turn on debug')
     args = parser.parse_args()
 
     main(args)
