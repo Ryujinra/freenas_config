@@ -156,7 +156,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process SMART data')
     parser.add_argument('devices', metavar='DEVICE', nargs='*',
                         help='an device to query')
-    parser.add_argument('--influx-uri', default='http://dashboard.lan:8086',
+    parser.add_argument('--influx-uri', default='http://influx.lan:8086',
                         help='send information to the given influx URI')
     parser.add_argument('--influx-db', default='smart',
                         help='send information to the given influx db')

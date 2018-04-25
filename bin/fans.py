@@ -302,7 +302,7 @@ if __name__ == '__main__':
                         help=('the integral time unit (default: 54.0)'))
     parser.add_argument('--cpu-max', type=float, metavar='TEMP_C', default=70.0,
                         help=('the integral time unit (default: 70.0)'))
-    parser.add_argument('--influx-uri', default='http://dashboard.lan:8086',
+    parser.add_argument('--influx-uri', default='http://influx.lan:8086',
                         help='send information to the given influx URI')
     parser.add_argument('--influx-db', default='fans',
                         help='send information to the given influx db')
