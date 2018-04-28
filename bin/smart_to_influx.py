@@ -51,7 +51,6 @@ def parse_smart(hostname, device, output, status):
         'device': device,
         'host': hostname,
         'model': info[b'Device Model'].decode('utf-8'),
-        'family': info[b'Model Family'].decode('utf-8'),
         'serial_number': info[b'Serial Number'].decode('utf-8'),
         'capacity': int(info[b'User Capacity'].split()[0].replace(b',', b'')),
         'enabled': info[b'SMART support is'].lower() == b'enabled',
@@ -63,6 +62,9 @@ def parse_smart(hostname, device, output, status):
         'is_ssd': is_ssd,
         'status': status,
     }
+    family = info.get(b'Model Family')
+    if family:
+        info['family'] = family.decode('utf-8'),
     wwn = info.get(b'LU WWN Device Id')
     if wwn:
        info['wwn']: wwn.replace(b' ', b'')
@@ -95,7 +97,10 @@ def parse_smart(hostname, device, output, status):
 
 def create_influx_str(ts, info, attributes):
     tags = ['%s=%s' % (key, info[key].replace(' ', r'\ '))
-            for key in ('host', 'device', 'model', 'family', 'serial_number')]
+            for key in ('host', 'device', 'model', 'serial_number')]
+    family = info.get('family')
+    if family:
+        tags.append('family=%s' % family.replace(' ', r'\ '))
     tags.extend(['%s=%d' % (key, info[key]) for key in ('enabled', 'is_ssd', 'capacity', 'rpm')])
     tags = ','.join(tags)
     if not info['is_ssd']:
@@ -110,7 +115,9 @@ def create_influx_str(ts, info, attributes):
                   attributes[b'Power_On_Hours']['raw_value'],
                   attributes[b'UDMA_CRC_Error_Count']['raw_value'])
         tag_fields = ['%s="%s"' % (key, info[key])
-            for key in ('host', 'device', 'model', 'family', 'serial_number')]
+            for key in ('host', 'device', 'model', 'serial_number')]
+        if family:
+            tag_fields.append('family="%s"' % family)
         tag_fields.extend(['%s=%d' % (key, info[key]) for key in ('enabled', 'is_ssd', 'capacity', 'rpm')])
         fields += ',' + ','.join(tag_fields)
     else:
@@ -124,6 +131,8 @@ def main(args):
         if not args.devices:
             rows = subprocess.check_output(SCAN_CMD.split()).strip().split(b'\n')
             args.devices = [row.strip().split(b' ', 1)[0].decode('utf-8') for row in rows]
+
+        logger.debug('%s', args.devices)
 
         hostname = socket.gethostname()
         ts = datetime.now().timestamp() * 1000000000

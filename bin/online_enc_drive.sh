@@ -4,3 +4,4 @@
 # $2 = uuid of drive
 
 echo "geli attach -p -k $1 /dev/gptid/$2 && zpool online zfs gptid/$2.eli"
+echo "gmirror activate ?"
