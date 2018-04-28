@@ -7,7 +7,7 @@ import argparse
 import socket
 import os
 from datetime import datetime
-from pprint import pprint
+from pprint import pprint, pformat
 import logging
 import logging.handlers
 import requests
@@ -47,6 +47,7 @@ def parse_smart(hostname, device, output, status):
     else:
         rpm = int(info[b'Rotation Rate'].split()[0])
         is_ssd = False
+    family = info.get(b'Model Family')
     info = {
         'device': device,
         'host': hostname,
@@ -62,9 +63,10 @@ def parse_smart(hostname, device, output, status):
         'is_ssd': is_ssd,
         'status': status,
     }
-    family = info.get(b'Model Family')
     if family:
-        info['family'] = family.decode('utf-8'),
+        info['family'] = family.decode('utf-8')
+    else:
+        info['family'] = info['model']
     wwn = info.get(b'LU WWN Device Id')
     if wwn:
        info['wwn']: wwn.replace(b' ', b'')
@@ -144,7 +146,7 @@ def main(args):
                 result = subprocess.run(cmd.split(), check=False, stdout=subprocess.PIPE)
                 if result.returncode == 0 or result.returncode >= 8:
                     info, attrs = parse_smart(hostname, device, result.stdout, result.returncode)
-                    logger.debug(info)
+                    logger.debug(pformat(info))
                     if not info['is_ssd']:
                         ss = create_influx_str(ts, info, attrs)
                         if args.debug:
